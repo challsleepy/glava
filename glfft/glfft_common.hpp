@@ -16,163 +16,245 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-// For the most part used by the implementation.
-
-#ifndef GLFFT_COMMON_HPP__
-#define GLFFT_COMMON_HPP__
+#ifndef GLFFT_GL_INTERFACE_HPP__
+#define GLFFT_GL_INTERFACE_HPP__
 
 #include "glfft_interface.hpp"
-#include <functional>
-#include <cstddef>
-#include <cstdlib>
-#include <stdexcept>
-#include <string>
-#include <cstring>
-#include <memory>
-#include <unordered_map>
+
+#include "glfft_gl_api_headers.hpp"
+
+/* GLava additions (POSIX) */
+extern "C" {
+    #include <time.h>
+    #include <stdarg.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <error.h>
+    #include <errno.h>
+    #include <stdio.h>
+}
+
+#ifndef GLFFT_GLSL_LANG_STRING
+#error GLFFT_GLSL_LANG_STRING must be defined to e.g. "#version 310 es\n" or "#version 430 core\n".
+#endif
+
+#ifndef GLFFT_LOG_OVERRIDE
+void glfft_log(const char *fmt, ...) {
+    va_list l;
+    va_start(l, fmt);
+    vfprintf(stdout, fmt, l);
+    va_end(l);
+}
+#else
+#define glfft_log GLFFT_LOG_OVERRIDE
+#endif
+
+#ifndef GLFFT_TIME_OVERRIDE
+double glfft_time() {
+    struct timespec tv;
+    if (clock_gettime(CLOCK_REALTIME, &tv)) {
+        fprintf(stderr, "clock_gettime(CLOCK_REALTIME, ...): %s\n", strerror(errno));
+    }
+    return (double) tv.tv_sec + ((double) tv.tv_nsec / 1000000000.0);
+}
+#else
+#define glfft_time GLFFT_TIME_OVERRIDE
+#endif
 
 namespace GLFFT
 {
+    class GLContext;
 
-enum Direction
-{
-    /// Forward FFT transform.
-    Forward = -1,
-    /// Inverse FFT transform, but with two inputs (in frequency domain) which are multiplied together
-    /// for convolution.
-    InverseConvolve = 0,
-    /// Inverse FFT transform.
-    Inverse = 1
-};
-
-enum Mode
-{
-    Horizontal,
-    HorizontalDual,
-    Vertical,
-    VerticalDual,
-
-    ResolveRealToComplex,
-    ResolveComplexToReal,
-};
-
-enum Type
-{
-    /// Regular complex-to-complex transform.
-    ComplexToComplex,
-    /// Complex-to-complex dual transform where the complex value is four-dimensional,
-    /// i.e. a vector of two complex values. Typically used to transform RGBA data.
-    ComplexToComplexDual,
-    /// Complex-to-real transform. N / 2 + 1 complex values are used per row with a stride of N complex samples.
-    ComplexToReal,
-    /// Real-to-complex transform. N / 2 + 1 complex output samples are created per row with a stride of N complex samples.
-    RealToComplex
-};
-
-enum Target
-{
-    /// GL_SHADER_STORAGE_BUFFER
-    SSBO,
-    /// Textures, when used as output, type is determined by transform type.
-    /// ComplexToComplex / RealToComplex -> GL_RG16F
-    /// ComplexToComplexDual -> GL_RGBA16F
-    Image,
-    /// Real-valued (single component) textures, when used as output, type is determined by transform type.
-    /// ComplexToReal -> GL_R32F (because GLES 3.1 doesn't have GL_R16F image type).
-    ImageReal
-};
-
-struct Parameters
-{
-    unsigned workgroup_size_x;
-    unsigned workgroup_size_y;
-    unsigned workgroup_size_z;
-    unsigned radix;
-    unsigned vector_size;
-    Direction direction;
-    Mode mode;
-    Target input_target;
-    Target output_target;
-    bool p1;
-    bool shared_banked;
-    bool fft_fp16, input_fp16, output_fp16;
-    bool fft_normalize;
-
-    bool operator==(const Parameters &other) const
+    class GLTexture : public Texture
     {
-        return std::memcmp(this, &other, sizeof(Parameters)) == 0;
-    }
-};
+        public:
+            friend class GLContext;
+            friend class GLCommandBuffer;
+            ~GLTexture();
 
-/// @brief Options for FFT implementation.
-/// Defaults for performance as conservative.
-struct FFTOptions
-{
-    struct Performance
+            GLTexture(GLuint obj) : name(obj), owned(false) {}
+            GLuint get() const { return name; }
+
+        private:
+            GLTexture(const void *initial_data,
+                    unsigned width, unsigned height,
+                    Format format);
+            GLuint name;
+            bool owned = true;
+    };
+
+    // Not really used by test and bench code, but can be useful for API users.
+    class GLSampler : public Sampler
     {
-        /// Workgroup size used in layout(local_size_x).
-        /// Only affects performance, however, large values may make implementations of smaller sized FFTs impossible.
-        /// FFT constructor will throw in this case.
-        unsigned workgroup_size_x = 4;
-        /// Workgroup size used in layout(local_size_x).
-        /// Only affects performance, however, large values may make implementations of smaller sized FFTs impossible.
-        /// FFT constructor will throw in this case.
-        unsigned workgroup_size_y = 1;
-        /// Vector size. Very GPU dependent. "Scalar" GPUs prefer 2 here, vector GPUs prefer 4 (and maybe 8).
-        unsigned vector_size = 2;
-        /// Whether to use banked shared memory or not.
-        /// Desktop GPUs prefer true here, false for mobile in general.
-        bool shared_banked = false;
-    } performance;
+        public:
+            friend class GLContext;
+            friend class GLCommandBuffer;
+            ~GLSampler();
 
-    struct Type
+            GLSampler(GLuint obj) : name(obj) {}
+            GLuint get() const { return name; }
+
+        private:
+            GLuint name;
+    };
+
+    class GLBuffer : public Buffer
     {
-        /// Whether internal shader should be mediump float.
-        bool fp16 = false;
-        /// Whether input SSBO is a packed 2xfp16 format. Otherwise, regular FP32.
-        bool input_fp16 = false;
-        /// Whether output SSBO is a packed 2xfp16 format. Otherwise, regular FP32.
-        bool output_fp16 = false;
-        /// Whether to apply 1 / N normalization factor.
-        bool normalize = false;
-    } type;
-};
+        public:
+            friend class GLContext;
+            friend class GLCommandBuffer;
+            ~GLBuffer();
 
-}
+            GLBuffer(GLuint obj) : name(obj), owned(false) {}
+            GLuint get() const { return name; }
 
-namespace std
-{
-    template<>
-    struct hash<GLFFT::Parameters>
+        private:
+            GLuint name;
+            GLBuffer(const void *initial_data, size_t size, AccessMode access);
+            bool owned = true;
+    };
+
+    class GLProgram : public Program
     {
-        std::size_t operator()(const GLFFT::Parameters &params) const
-        {
-            std::size_t h = 0;
-            hash<uint8_t> hasher;
-            for (std::size_t i = 0; i < sizeof(GLFFT::Parameters); i++)
+        public:
+            friend class GLContext;
+            friend class GLCommandBuffer;
+            ~GLProgram();
+
+            GLuint get() const { return name; }
+
+        private:
+            GLProgram(GLuint name);
+            GLuint name;
+    };
+
+    class GLCommandBuffer : public CommandBuffer
+    {
+        public:
+            ~GLCommandBuffer() = default;
+
+            void set_constant_data_buffers(const GLuint *ubos, unsigned count)
             {
-                h ^= hasher(reinterpret_cast<const uint8_t*>(&params)[i]);
+                this->ubos = ubos;
+                ubo_index = 0;
+                ubo_count = count;
             }
 
-            return h;
-        }
+            void bind_program(Program *program) override;
+            void bind_storage_texture(unsigned binding, Texture *texture, Format format) override;
+            void bind_texture(unsigned binding, Texture *texture) override;
+            void bind_sampler(unsigned binding, Sampler *sampler) override;
+            void bind_storage_buffer(unsigned binding, Buffer *texture) override;
+            void bind_storage_buffer_range(unsigned binding, size_t offset, size_t length, Buffer *texture) override;
+            void dispatch(unsigned x, unsigned y, unsigned z) override;
+
+            void barrier(Buffer *buffer) override;
+            void barrier(Texture *buffer) override;
+            void barrier() override;
+
+            void push_constant_data(unsigned binding, const void *data, size_t size) override;
+
+        private:
+            const GLuint *ubos = nullptr;
+            unsigned ubo_count = 0;
+            unsigned ubo_index = 0;
     };
-}
 
-namespace GLFFT
-{
+    class GLContext : public Context
+    {
+        public:
+            ~GLContext();
 
-class ProgramCache
-{
-    public:
-        Program* find_program(const Parameters &parameters) const;
-        void insert_program(const Parameters &parameters, std::unique_ptr<Program> program);
-        size_t cache_size() const { return programs.size(); }
+            std::unique_ptr<Texture> create_texture(const void *initial_data,
+                    unsigned width, unsigned height,
+                    Format format) override;
 
-    private:
-        std::unordered_map<Parameters, std::unique_ptr<Program>> programs;
-};
+            std::unique_ptr<Buffer> create_buffer(const void *initial_data, size_t size, AccessMode access) override;
+            std::unique_ptr<Program> compile_compute_shader(const char *source) override;
 
+            CommandBuffer* request_command_buffer() override;
+            void submit_command_buffer(CommandBuffer *cmd) override;
+            void wait_idle() override;
+
+            const char* get_renderer_string() override;
+            void log(const char *fmt, ...) override;
+            double get_time() override;
+
+            unsigned get_max_work_group_threads() override;
+
+            const void* map(Buffer *buffer, size_t offset, size_t size) override;
+            void unmap(Buffer *buffer) override;
+
+            // Not supported in GLES, so override when creating platform-specific context.
+            bool supports_texture_readback() override { return false; }
+            void read_texture(void*, Texture*, Format) override {}
+
+        protected:
+            void teardown();
+
+        private:
+            static GLCommandBuffer static_command_buffer;
+
+            enum { MaxBuffersRing = 256 };
+            GLuint ubos[MaxBuffersRing];
+            bool initialized_ubos = false;
+    };
+
+    static inline GLenum convert(AccessMode mode)
+    {
+        switch (mode)
+        {
+            case AccessStreamCopy: return GL_STREAM_COPY;
+            case AccessStaticCopy: return GL_STATIC_COPY;
+            case AccessStreamRead: return GL_STREAM_READ;
+        }
+        return 0;
+    }
+
+    static inline GLenum convert(Format format)
+    {
+        switch (format)
+        {
+            case FormatR16G16B16A16Float: return GL_RGBA16F;
+            case FormatR32G32B32A32Float: return GL_RGBA32F;
+            case FormatR32Float: return GL_R32F;
+            case FormatR16G16Float: return GL_RG16F;
+            case FormatR32G32Float: return GL_RG32F;
+            case FormatR32Uint: return GL_R32UI;
+            case FormatUnknown: return 0;
+        }
+        return 0;
+    }
+
+    static inline GLenum convert_format(Format format)
+    {
+        switch (format)
+        {
+            case FormatR16G16Float: return GL_RG;
+            case FormatR32G32Float: return GL_RG;
+            case FormatR16G16B16A16Float: return GL_RGBA;
+            case FormatR32G32B32A32Float: return GL_RGBA;
+            case FormatR32Float: return GL_RED;
+            case FormatR32Uint: return GL_RED_INTEGER;
+            case FormatUnknown: return 0;
+        }
+        return 0;
+    }
+
+    static inline GLenum convert_type(Format format)
+    {
+        switch (format)
+        {
+            case FormatR16G16Float: return GL_HALF_FLOAT;
+            case FormatR16G16B16A16Float: return GL_HALF_FLOAT;
+            case FormatR32Float: return GL_FLOAT;
+            case FormatR32G32Float: return GL_FLOAT;
+            case FormatR32G32B32A32Float: return GL_FLOAT;
+            case FormatR32Uint: return GL_UNSIGNED_INT;
+            case FormatUnknown: return 0;
+        }
+        return 0;
+    }
 }
 
 #endif
