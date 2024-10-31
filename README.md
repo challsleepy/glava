@@ -6,7 +6,7 @@
 **Compiling:**
 
 ```bash
-$ git clone https://github.com/jarcode-foss/glava
+$ git clone https://github.com/challsleepy/glava
 $ cd glava
 $ meson build --prefix /usr
 $ ninja -C build
